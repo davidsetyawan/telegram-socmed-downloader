@@ -47,10 +47,7 @@ def _username_from_url(url: str) -> str | None:
     parts = [p for p in parsed.path.split("/") if p]
     if not parts:
         return None
-    # IG: first path segment after host; Twitter: same.
-    name = parts[0]
-    # Strip trailing slash artifacts; keep alnum + underscore + period.
-    name = name.split("?")[0]
+    name = parts[0].split("?")[0]
     if re.match(r"^[A-Za-z0-9._-]+$", name):
         return name
     return None
@@ -92,24 +89,33 @@ def _kwdict_content(kw: dict) -> str | None:
 def _kwdict_post_url(kw: dict, fallback_url: str) -> str:
     return str(kw.get("post_url") or fallback_url)
 
+
 def _truncate_caption(text: str, limit: int = 1024) -> str:
     """Telegram caption limit is 1024 chars; trim and add ellipsis if needed."""
     if len(text) <= limit:
         return text
     return text[: limit - 1].rstrip() + "…"
 
-def _profile_url(handle: str, host_hint: str) -> str:
-    """Build a profile URL for a given handle, picking the right host.
 
-    `host_hint` is the original URL's host so the profile link points to
-    the same platform the user sent from.
-    """
+def _profile_url(handle: str, host_hint: str) -> str:
+    """Build a profile URL for a given handle, picking the right host."""
     if "instagram.com" in host_hint:
         return f"https://www.instagram.com/{handle}/"
-    # twitter.com or x.com
     if "twitter.com" in host_hint:
         return f"https://twitter.com/{handle}"
     return f"https://x.com/{handle}"
+
+
+def _html_escape(text: str) -> str:
+    """Escape the three chars that are special in Telegram HTML parse mode."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _parse_mode_for(caption: str | None) -> str | None:
+    """Return 'HTML' if the caption contains HTML tags we built, else None."""
+    if caption and "<" in caption:
+        return "HTML"
+    return None
 
 
 def build_caption(
@@ -117,17 +123,17 @@ def build_caption(
 ) -> str | None:
     """Build a caption for the first file in the album.
 
-    Post URL:
+    Post URL (HTML):
         <post text>
 
-        By: [@<handle>](<profile url>) (<display name>)
+        By: <a href="<profile url>">@<handle></a> (<display name>)
         <post url>
 
-    Profile URL:
-        From: [@<handle>](<profile url>) (<display name>)
+    Profile URL (HTML):
+        From: <a href="<profile url>">@<handle></a> (<display name>)
         <profile url>
 
-    Returns None if no caption is possible (no files).
+    Returns None if no caption is possible.
     """
     if not files:
         return None
@@ -138,44 +144,52 @@ def build_caption(
     host_hint = urlparse(url).hostname or ""
     if handle:
         profile_url = _profile_url(handle, host_hint)
-        handle_md = f"[@{handle}]({profile_url})"
+        handle_link = f'<a href="{_html_escape(profile_url)}">@{_html_escape(handle)}</a>'
     else:
-        handle_md = "unknown"
+        handle_link = "unknown"
     if kind == "post":
         content = (_kwdict_content(first_kw) or "").strip()
         post_url = _kwdict_post_url(first_kw, url)
-        byline = f"By: {handle_md}"
+        byline = f"By: {handle_link}"
         if display:
-            byline += f" ({display})"
-        body = "\n\n".join(part for part in (content, byline, post_url) if part)
+            byline += f" ({_html_escape(display)})"
+        body = "\n\n".join(
+            part for part in (_html_escape(content), byline, _html_escape(post_url)) if part
+        )
     else:
-        # Profile: 'From: [@<handle>](<profile url>) (<display name>)\\n<profile url>'
-        line1 = f"From: {handle_md}"
+        line1 = f"From: {handle_link}"
         if display:
-            line1 += f" ({display})"
-        body = f"{line1}\n{url}"
+            line1 += f" ({_html_escape(display)})"
+        body = f"{line1}\n{_html_escape(url)}"
     return _truncate_caption(body)
 
 
 async def _send_image(bot: Bot, chat_id: int, f: Path, caption: str | None) -> None:
     with open(f, "rb") as fh:
         data = fh.read()
-    await bot.send_photo(chat_id=chat_id, photo=data, filename=f.name, caption=caption, parse_mode="Markdown" if caption and "[" in caption else None)
+    await bot.send_photo(
+        chat_id=chat_id, photo=data, filename=f.name, caption=caption,
+        parse_mode=_parse_mode_for(caption),
+    )
 
 
 async def _send_video(bot: Bot, chat_id: int, f: Path, caption: str | None) -> None:
     with open(f, "rb") as fh:
         data = fh.read()
     await bot.send_video(
-        chat_id=chat_id, video=data, filename=f.name, caption=caption, supports_streaming=True,
-        parse_mode="Markdown" if caption and "[" in caption else None,
+        chat_id=chat_id, video=data, filename=f.name, caption=caption,
+        supports_streaming=True,
+        parse_mode=_parse_mode_for(caption),
     )
 
 
 async def _send_doc(bot: Bot, chat_id: int, f: Path, caption: str | None) -> None:
     with open(f, "rb") as fh:
         data = fh.read()
-    await bot.send_document(chat_id=chat_id, document=data, filename=f.name, caption=caption, parse_mode="Markdown" if caption and "[" in caption else None)
+    await bot.send_document(
+        chat_id=chat_id, document=data, filename=f.name, caption=caption,
+        parse_mode=_parse_mode_for(caption),
+    )
 
 
 async def _send_image_album(
@@ -186,7 +200,12 @@ async def _send_image_album(
         with open(f, "rb") as fh:
             data = fh.read()
         item_caption = caption if idx == 0 else None
-        media.append(InputMediaPhoto(media=data, filename=f.name, caption=item_caption, parse_mode="Markdown" if item_caption and "[" in item_caption else None))
+        media.append(
+            InputMediaPhoto(
+                media=data, filename=f.name, caption=item_caption,
+                parse_mode=_parse_mode_for(item_caption),
+            )
+        )
     await bot.send_media_group(chat_id=chat_id, media=media)
 
 

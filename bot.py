@@ -52,11 +52,89 @@ def _tmpdir():
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
-
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not whitelist.is_allowed(update.effective_user.id):
         return
     await update.message.reply_text("welcome")
+
+
+def _is_admin(user_id: int) -> bool:
+    return user_id == config.ADMIN_ID
+
+
+async def cmd_uploadcookies(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_admin(update.effective_user.id):
+        return
+    context.user_data["awaiting_cookies"] = True
+    await update.message.reply_text(
+        "send the cookies file; filename must contain 'instagram' or 'twitter' "
+        "(e.g. www.instagram.com_cookies.txt)"
+    )
+
+
+async def handle_cookie_upload(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    if not _is_admin(update.effective_user.id):
+        return
+    if not context.user_data.get("awaiting_cookies"):
+        return
+    doc = update.message.document
+    if doc is None:
+        return
+    try:
+        bucket = cookies_store.bucket_name_for_filename(doc.file_name or "")
+        file = await doc.get_file()
+        buf = bytearray()
+        async for chunk in file.download_chunked():
+            buf.extend(chunk)
+        target = cookies_store.save_for_bucket(bytes(buf), bucket)
+    except cookies_store.CookieError as e:
+        await update.message.reply_text(str(e))
+        return
+    except Exception:
+        _log.exception("cookie upload failed")
+        await update.message.reply_text("cookie upload failed")
+        return
+    context.user_data["awaiting_cookies"] = False
+    await update.message.reply_text(f"cookies updated: {target.name}")
+
+
+async def cmd_wl_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("usage: /whitelist_add <user_id>")
+        return
+    try:
+        uid = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("user_id must be an integer")
+        return
+    whitelist.add(uid)
+    await update.message.reply_text(f"whitelist size: {len(whitelist.load())}")
+
+
+async def cmd_wl_remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("usage: /whitelist_remove <user_id>")
+        return
+    try:
+        uid = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("user_id must be an integer")
+        return
+    whitelist.remove(uid)
+    await update.message.reply_text(f"whitelist size: {len(whitelist.load())}")
+
+
+async def cmd_wl_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_admin(update.effective_user.id):
+        return
+    ids = sorted(whitelist.load())
+    await update.message.reply_text(", ".join(str(i) for i in ids) or "(empty)")
 
 
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -74,10 +152,10 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         with _tmpdir() as out_dir:
             cookies = cookies_store.get_path_for_host(url)
             if cookies is None:
-                bucket = cookies_store.bucket_for_host(url) or "this host"
+                bucket = cookies_store.bucket_for_host(url) or "this"
                 await update.message.reply_text(
-                    f"no {bucket} cookies uploaded yet; admin must place "
-                    f"cookies_{bucket}.txt in storage/"
+                    f"no {bucket} cookies uploaded yet; admin must "
+                    f"/uploadcookies first (filename must contain '{bucket}')"
                 )
                 return
             try:
@@ -110,6 +188,16 @@ def build_app() -> Application:
     app = builder.build()
 
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("uploadcookies", cmd_uploadcookies))
+    app.add_handler(
+        MessageHandler(
+            filters.Document.ALL & filters.User(config.ADMIN_ID),
+            handle_cookie_upload,
+        )
+    )
+    app.add_handler(CommandHandler("whitelist_add", cmd_wl_add))
+    app.add_handler(CommandHandler("whitelist_remove", cmd_wl_remove))
+    app.add_handler(CommandHandler("whitelist_list", cmd_wl_list))
     app.add_handler(
         MessageHandler(filters.Regex(URL_RE) & ~filters.COMMAND, handle_url)
     )

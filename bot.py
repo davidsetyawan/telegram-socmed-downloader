@@ -1,9 +1,9 @@
 import asyncio
 import contextlib
+import io
 import logging
 import os
 import re
-import shutil
 import time
 from telegram import Update
 from telegram.ext import (
@@ -90,8 +90,9 @@ async def handle_cookie_upload(
     try:
         bucket = cookies_store.bucket_name_for_filename(doc.file_name or "")
         file = await doc.get_file()
-        buf = await file.download_to_memory()
-        target = cookies_store.save_for_bucket(bytes(buf), bucket)
+        buf = io.BytesIO()
+        await file.download_to_memory(buf)
+        target = cookies_store.save_for_bucket(buf.getvalue(), bucket)
     except cookies_store.CookieError as e:
         await update.message.reply_text(str(e))
         return

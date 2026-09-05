@@ -51,8 +51,14 @@ class _KwdictCollectingJob(gd_job.DownloadJob):
         captured = {
             k: kwdict.get(k)
             for k in (
-                "category", "uploader", "uploader_id",
-                "post_url", "content", "tweet_id", "date", "user",
+                # Twitter
+                "category", "user", "content", "tweet_id", "date",
+                # Instagram (older/most fields)
+                "uploader", "uploader_id",
+                # Instagram (newer API fields)
+                "username", "fullname", "owner_id", "description",
+                # Common
+                "post_url",
             )
         }
         self._kwdict_list.append(captured)

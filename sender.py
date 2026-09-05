@@ -24,7 +24,6 @@ def _chunks(items: list, n: int):
         yield items[i : i + n]
 
 
-# Matches a post-style URL: instagram /p/... or /reel/..., twitter /status/...
 _POST_RE = re.compile(
     r"^https?://(?:www\.)?(?:instagram\.com/(?:p|reel)/[\w-]+/?|"
     r"(?:twitter|x)\.com/[^/]+/status/\d+/?)$",
@@ -33,16 +32,10 @@ _POST_RE = re.compile(
 
 
 def _url_kind(url: str) -> str:
-    """Return 'post' if the URL is a single-post URL, else 'profile'."""
     return "post" if _POST_RE.match(url.strip()) else "profile"
 
 
 def _username_from_url(url: str) -> str | None:
-    """Extract the username from a profile URL.
-
-    https://www.instagram.com/username/ -> 'username'
-    https://twitter.com/username         -> 'username'
-    """
     parsed = urlparse(url)
     parts = [p for p in parsed.path.split("/") if p]
     if not parts:
@@ -54,7 +47,13 @@ def _username_from_url(url: str) -> str | None:
 
 
 def _kwdict_username(kw: dict) -> str | None:
-    """Pull a username/handle from a gallery-dl kwdict if present."""
+    """Username/handle from a gallery-dl kwdict.
+
+    Order: Instagram `username`, Twitter `user.name`, generic `uploader`.
+    """
+    username = kw.get("username")
+    if username:
+        return str(username)
     user = kw.get("user") or {}
     if isinstance(user, dict):
         name = user.get("name")
@@ -67,10 +66,13 @@ def _kwdict_username(kw: dict) -> str | None:
 
 
 def _kwdict_display(kw: dict) -> str | None:
-    """Pull a display name from a gallery-dl kwdict if present.
+    """Display name from a gallery-dl kwdict.
 
-    Twitter puts a 'nick' on user; IG's uploader_id is not a display name.
+    Order: Instagram `fullname`, Twitter `user.nick`.
     """
+    fullname = kw.get("fullname")
+    if fullname:
+        return str(fullname)
     user = kw.get("user") or {}
     if isinstance(user, dict):
         nick = user.get("nick")
@@ -80,9 +82,14 @@ def _kwdict_display(kw: dict) -> str | None:
 
 
 def _kwdict_content(kw: dict) -> str | None:
-    content = kw.get("content")
-    if content and isinstance(content, str):
-        return content
+    """Post text from a gallery-dl kwdict.
+
+    Order: Instagram `description`, then generic `content`.
+    """
+    for k in ("description", "content"):
+        v = kw.get(k)
+        if v and isinstance(v, str):
+            return v
     return None
 
 
@@ -91,14 +98,12 @@ def _kwdict_post_url(kw: dict, fallback_url: str) -> str:
 
 
 def _truncate_caption(text: str, limit: int = 1024) -> str:
-    """Telegram caption limit is 1024 chars; trim and add ellipsis if needed."""
     if len(text) <= limit:
         return text
     return text[: limit - 1].rstrip() + "…"
 
 
 def _profile_url(handle: str, host_hint: str) -> str:
-    """Build a profile URL for a given handle, picking the right host."""
     if "instagram.com" in host_hint:
         return f"https://www.instagram.com/{handle}/"
     if "twitter.com" in host_hint:
@@ -107,12 +112,10 @@ def _profile_url(handle: str, host_hint: str) -> str:
 
 
 def _html_escape(text: str) -> str:
-    """Escape the three chars that are special in Telegram HTML parse mode."""
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _parse_mode_for(caption: str | None) -> str | None:
-    """Return 'HTML' if the caption contains HTML tags we built, else None."""
     if caption and "<" in caption:
         return "HTML"
     return None
@@ -132,20 +135,16 @@ def build_caption(
     Profile URL (HTML):
         From: <a href="<profile url>">@<handle></a> (<display name>)
         <profile url>
-
-    Returns None if no caption is possible.
     """
     if not files:
         return None
     kind = _url_kind(url)
     first_kw = kwdicts[0] if kwdicts else {}
-
     display = _kwdict_display(first_kw)
     handle = _kwdict_username(first_kw)
     if not handle and kind == "profile":
         # Profile URL has the username as path[0]. Safe to parse.
         handle = _username_from_url(url)
-
     host_hint = urlparse(url).hostname or ""
     if handle:
         profile_url = _profile_url(handle, host_hint)

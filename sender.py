@@ -139,8 +139,13 @@ def build_caption(
         return None
     kind = _url_kind(url)
     first_kw = kwdicts[0] if kwdicts else {}
-    handle = _kwdict_username(first_kw) or _username_from_url(url)
+
     display = _kwdict_display(first_kw)
+    handle = _kwdict_username(first_kw)
+    if not handle and kind == "profile":
+        # Profile URL has the username as path[0]. Safe to parse.
+        handle = _username_from_url(url)
+
     host_hint = urlparse(url).hostname or ""
     if handle:
         profile_url = _profile_url(handle, host_hint)

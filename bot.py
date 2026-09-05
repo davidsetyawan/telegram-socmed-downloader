@@ -63,11 +63,14 @@ def _is_admin(user_id: int) -> bool:
 
 
 async def cmd_uploadcookies(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_admin(update.effective_user.id):
+    uid = update.effective_user.id if update.effective_user else None
+    if not _is_admin(uid):
+        _log.info("cmd_uploadcookies ignored: uid=%s is not admin", uid)
         return
-    context.user_data["awaiting_cookies"] = True
+    _log.info("cmd_uploadcookies: uid=%s (now arm-less)", uid)
     await update.message.reply_text(
-        "send the cookies file; filename must contain 'instagram' or 'twitter' "
+        "send the cookies file (any document from admin is accepted); "
+        "filename must contain 'instagram' or 'twitter' "
         "(e.g. www.instagram.com_cookies.txt)"
     )
 
@@ -75,19 +78,19 @@ async def cmd_uploadcookies(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def handle_cookie_upload(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    if not _is_admin(update.effective_user.id):
-        return
-    if not context.user_data.get("awaiting_cookies"):
+    uid = update.effective_user.id if update.effective_user else None
+    if not _is_admin(uid):
+        _log.info("cookie upload ignored: uid=%s is not admin", uid)
         return
     doc = update.message.document
     if doc is None:
+        _log.info("cookie upload ignored: message had no document")
         return
+    _log.info("cookie upload starting: filename=%s uid=%s", doc.file_name, uid)
     try:
         bucket = cookies_store.bucket_name_for_filename(doc.file_name or "")
         file = await doc.get_file()
-        buf = bytearray()
-        async for chunk in file.download_chunked():
-            buf.extend(chunk)
+        buf = await file.download_to_memory()
         target = cookies_store.save_for_bucket(bytes(buf), bucket)
     except cookies_store.CookieError as e:
         await update.message.reply_text(str(e))
@@ -96,7 +99,6 @@ async def handle_cookie_upload(
         _log.exception("cookie upload failed")
         await update.message.reply_text("cookie upload failed")
         return
-    context.user_data["awaiting_cookies"] = False
     await update.message.reply_text(f"cookies updated: {target.name}")
 
 

@@ -192,6 +192,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                         hint = "no media found"
                     await status.edit_text(hint)
                     return
+                await sender.send_files(context.bot, chat_id, files)
                 await status.edit_text(f"done: {len(files)} file(s)")
             finally:
                 shutil.rmtree(out_dir, ignore_errors=True)

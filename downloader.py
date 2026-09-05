@@ -66,6 +66,7 @@ def run(url: str, out_dir: Path, cookies_path: Path | None) -> tuple[list[Path],
     ext_path = _IG_PATH if bucket == "instagram" else _TW_PATH if bucket == "twitter" else None
     if ext_path is not None:
         gd_config.set(ext_path, "user-agent", _DEFAULT_UA)
+    kwdicts: list[dict] = []
     try:
         j = _KwdictCollectingJob(url, kwdicts)
         j.run()

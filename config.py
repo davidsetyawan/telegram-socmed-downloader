@@ -28,6 +28,5 @@ def _optional_str(name: str) -> str | None:
 
 BOT_TOKEN: str = _required("BOT_TOKEN")
 ADMIN_ID: int = int(_required("ADMIN_ID"))
-ALBUM_MAX: int = _optional_int("ALBUM_MAX", 10)
 MAX_FILE_BYTES: int = _optional_int("MAX_FILE_BYTES", 50 * 1024 * 1024)
 BASE_URL: str | None = _optional_str("BASE_URL")

@@ -9,31 +9,20 @@ _WHITELIST_PATH = DATA_DIR / "whitelist.json"
 _log = logging.getLogger(__name__)
 
 
-def _path() -> Path:
-    return _WHITELIST_PATH
-
-
 def load() -> set[int]:
-    p = _path()
+    p = _WHITELIST_PATH
     if not p.exists():
         return set()
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
+        ids = json.loads(p.read_text(encoding="utf-8")).get("user_ids", [])
+        return {int(x) for x in ids}
+    except (json.JSONDecodeError, TypeError, ValueError):
         _log.exception("whitelist file corrupt; treating as empty: %s", p)
         return set()
-    ids = data.get("user_ids", [])
-    out: set[int] = set()
-    for item in ids:
-        try:
-            out.add(int(item))
-        except (TypeError, ValueError):
-            continue
-    return out
 
 
 def save(ids: set[int]) -> None:
-    p = _path()
+    p = _WHITELIST_PATH
     tmp = p.with_suffix(".json.tmp")
     payload = {"user_ids": sorted(ids)}
     tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")

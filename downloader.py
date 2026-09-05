@@ -1,7 +1,7 @@
 import logging
 from pathlib import Path
-from urllib.parse import urlparse
 
+import cookies_store
 from gallery_dl import config as gd_config
 from gallery_dl import exception as gdlex
 from gallery_dl import job as gd_job
@@ -18,17 +18,8 @@ _DEFAULT_UA = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
-_IG_HOSTS = ("instagram.com",)
-_TW_HOSTS = ("twitter.com", "x.com")
-
-
-def _extractor_path_for(url: str) -> tuple[str, ...] | None:
-    host = (urlparse(url).hostname or "").lower()
-    if any(h in host for h in _IG_HOSTS):
-        return ("extractor", "instagram")
-    if any(h in host for h in _TW_HOSTS):
-        return ("extractor", "twitter")
-    return None
+_IG_PATH = ("extractor", "instagram")
+_TW_PATH = ("extractor", "twitter")
 
 
 class _KwdictCollectingJob(gd_job.DownloadJob):
@@ -71,10 +62,10 @@ def run(url: str, out_dir: Path, cookies_path: Path | None) -> tuple[list[Path],
     if cookies_path is not None:
         gd_config.set(("extractor",), "cookies", str(cookies_path))
     gd_config.set((), "base-directory", str(out_dir))
-    ext_path = _extractor_path_for(url)
+    bucket = cookies_store.bucket_for_host(url)
+    ext_path = _IG_PATH if bucket == "instagram" else _TW_PATH if bucket == "twitter" else None
     if ext_path is not None:
         gd_config.set(ext_path, "user-agent", _DEFAULT_UA)
-    kwdicts: list[dict] = []
     try:
         j = _KwdictCollectingJob(url, kwdicts)
         j.run()

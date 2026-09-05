@@ -1,11 +1,14 @@
 import mimetypes
-import re
 from pathlib import Path
 from urllib.parse import urlparse
 
 from telegram import Bot, InputMediaPhoto, InputMediaVideo
 
 import config
+import cookies_store
+
+ALBUM_MAX = 10
+CAPTION_LIMIT = 1024
 
 
 def _category(p: Path) -> str:
@@ -24,208 +27,130 @@ def _chunks(items: list, n: int):
         yield items[i : i + n]
 
 
-_POST_RE = re.compile(
-    r"^https?://(?:www\.)?(?:instagram\.com/(?:p|reel)/[\w-]+/?|"
-    r"(?:twitter|x)\.com/[^/]+/status/\d+/?)$",
-    re.IGNORECASE,
-)
-
-
-def _url_kind(url: str) -> str:
-    return "post" if _POST_RE.match(url.strip()) else "profile"
-
-
-def _username_from_url(url: str) -> str | None:
-    parsed = urlparse(url)
-    parts = [p for p in parsed.path.split("/") if p]
-    if not parts:
-        return None
-    name = parts[0].split("?")[0]
-    if re.match(r"^[A-Za-z0-9._-]+$", name):
-        return name
-    return None
-
-
-def _kwdict_username(kw: dict) -> str | None:
-    """Username/handle from a gallery-dl kwdict.
-
-    Order: Instagram `username`, Twitter `user.name`, generic `uploader`.
-    """
-    username = kw.get("username")
-    if username:
-        return str(username)
-    user = kw.get("user") or {}
-    if isinstance(user, dict):
-        name = user.get("name")
-        if name:
-            return str(name)
-    uploader = kw.get("uploader")
-    if uploader:
-        return str(uploader)
-    return None
-
-
-def _kwdict_display(kw: dict) -> str | None:
-    """Display name from a gallery-dl kwdict.
-
-    Order: Instagram `fullname`, Twitter `user.nick`.
-    """
-    fullname = kw.get("fullname")
-    if fullname:
-        return str(fullname)
-    user = kw.get("user") or {}
-    if isinstance(user, dict):
-        nick = user.get("nick")
-        if nick:
-            return str(nick)
-    return None
-
-
-def _kwdict_content(kw: dict) -> str | None:
-    """Post text from a gallery-dl kwdict.
-
-    Order: Instagram `description`, then generic `content`.
-    """
-    for k in ("description", "content"):
-        v = kw.get(k)
-        if v and isinstance(v, str):
-            return v
-    return None
-
-
-def _kwdict_post_url(kw: dict, fallback_url: str) -> str:
-    return str(kw.get("post_url") or fallback_url)
-
-
-def _truncate_caption(text: str, limit: int = 1024) -> str:
-    if len(text) <= limit:
+def _truncate(text: str) -> str:
+    if len(text) <= CAPTION_LIMIT:
         return text
-    return text[: limit - 1].rstrip() + "…"
+    return text[: CAPTION_LIMIT - 1].rstrip() + "…"
 
 
-def _profile_url(handle: str, host_hint: str) -> str:
-    if "instagram.com" in host_hint:
-        return f"https://www.instagram.com/{handle}/"
-    if "twitter.com" in host_hint:
-        return f"https://twitter.com/{handle}"
-    return f"https://x.com/{handle}"
-
-
-def _html_escape(text: str) -> str:
+def _html(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _parse_mode_for(caption: str | None) -> str | None:
-    if caption and "<" in caption:
-        return "HTML"
+    return "HTML" if caption and "<" in caption else None
+
+
+def _handle_from_kw(kw: dict) -> str | None:
+    if (u := kw.get("username")):
+        return str(u)
+    user = kw.get("user") or {}
+    if isinstance(user, dict) and (n := user.get("name")):
+        return str(n)
+    if (u := kw.get("uploader")):
+        return str(u)
     return None
 
 
-def build_caption(
-    url: str, kwdicts: list[dict], files: list[Path]
-) -> str | None:
-    """Build a caption for the first file in the album.
+def _display_from_kw(kw: dict) -> str | None:
+    if (f := kw.get("fullname")):
+        return str(f)
+    user = kw.get("user") or {}
+    if isinstance(user, dict) and (n := user.get("nick")):
+        return str(n)
+    return None
 
-    Post URL (HTML):
-        <post text>
 
-        By: <a href="<profile url>">@<handle></a> (<display name>)
-        <post url>
+def _is_post(url: str) -> bool:
+    return "/p/" in url or "/reel/" in url or "/status/" in url
 
-    Profile URL (HTML):
-        From: <a href="<profile url>">@<handle></a> (<display name>)
-        <profile url>
-    """
+
+def build_caption(url: str, kwdicts: list[dict], files: list[Path]) -> str | None:
+    """Build an HTML caption for the first file. See README for shape."""
     if not files:
         return None
-    kind = _url_kind(url)
-    first_kw = kwdicts[0] if kwdicts else {}
-    display = _kwdict_display(first_kw)
-    handle = _kwdict_username(first_kw)
-    if not handle and kind == "profile":
-        # Profile URL has the username as path[0]. Safe to parse.
-        handle = _username_from_url(url)
-    host_hint = urlparse(url).hostname or ""
+    kw = kwdicts[0] if kwdicts else {}
+    handle = _handle_from_kw(kw)
+    if not handle and not _is_post(url):
+        parts = urlparse(url).path.strip("/").split("/")
+        if parts and parts[0]:
+            handle = parts[0]
+    display = _display_from_kw(kw)
+    bucket = cookies_store.bucket_for_host(url) or ""
     if handle:
-        profile_url = _profile_url(handle, host_hint)
-        handle_link = f'<a href="{_html_escape(profile_url)}">@{_html_escape(handle)}</a>'
+        host = "www.instagram.com" if bucket == "instagram" else "x.com"
+        profile = f"https://{host}/{handle}"
+        handle_link = f'<a href="{_html(profile)}">@{_html(handle)}</a>'
     else:
         handle_link = "unknown"
-    if kind == "post":
-        content = (_kwdict_content(first_kw) or "").strip()
-        post_url = _kwdict_post_url(first_kw, url)
-        byline = f"By: {handle_link}"
-        if display:
-            byline += f" ({_html_escape(display)})"
-        body = "\n\n".join(
-            part for part in (_html_escape(content), byline, _html_escape(post_url)) if part
-        )
+    byline = f"{'By' if _is_post(url) else 'From'}: {handle_link}"
+    if display:
+        byline += f" ({_html(display)})"
+    if _is_post(url):
+        content = (kw.get("description") or kw.get("content") or "").strip()
+        post_url = str(kw.get("post_url") or url)
+        body = "\n\n".join(p for p in (_html(content), byline, _html(post_url)) if p)
     else:
-        line1 = f"From: {handle_link}"
-        if display:
-            line1 += f" ({_html_escape(display)})"
-        body = f"{line1}\n{_html_escape(url)}"
-    return _truncate_caption(body)
+        body = f"{byline}\n{_html(url)}"
+    return _truncate(body)
 
 
-async def _send_image(bot: Bot, chat_id: int, f: Path, caption: str | None) -> None:
+async def _read(f: Path) -> bytes:
     with open(f, "rb") as fh:
-        data = fh.read()
+        return fh.read()
+
+
+async def _send_photo(bot: Bot, chat_id: int, f: Path, caption: str | None) -> None:
     await bot.send_photo(
-        chat_id=chat_id, photo=data, filename=f.name, caption=caption,
+        chat_id=chat_id,
+        photo=await _read(f),
+        filename=f.name,
+        caption=caption,
         parse_mode=_parse_mode_for(caption),
     )
 
 
 async def _send_video(bot: Bot, chat_id: int, f: Path, caption: str | None) -> None:
-    with open(f, "rb") as fh:
-        data = fh.read()
     await bot.send_video(
-        chat_id=chat_id, video=data, filename=f.name, caption=caption,
+        chat_id=chat_id,
+        video=await _read(f),
+        filename=f.name,
+        caption=caption,
         supports_streaming=True,
         parse_mode=_parse_mode_for(caption),
     )
 
 
 async def _send_doc(bot: Bot, chat_id: int, f: Path, caption: str | None) -> None:
-    with open(f, "rb") as fh:
-        data = fh.read()
     await bot.send_document(
-        chat_id=chat_id, document=data, filename=f.name, caption=caption,
+        chat_id=chat_id,
+        document=await _read(f),
+        filename=f.name,
+        caption=caption,
         parse_mode=_parse_mode_for(caption),
     )
 
 
-async def _send_image_album(
-    bot: Bot, chat_id: int, chunk: list[Path], caption: str | None
-) -> None:
+async def _send_album(bot: Bot, chat_id: int, chunk: list[Path], caption: str | None) -> None:
     media = []
     for idx, f in enumerate(chunk):
-        with open(f, "rb") as fh:
-            data = fh.read()
         item_caption = caption if idx == 0 else None
-        media.append(
-            InputMediaPhoto(
-                media=data, filename=f.name, caption=item_caption,
-                parse_mode=_parse_mode_for(item_caption),
-            )
-        )
+        data = await _read(f)
+        item = InputMediaVideo if _category(f) == "video" else InputMediaPhoto
+        media.append(item(media=data, filename=f.name, caption=item_caption, parse_mode=_parse_mode_for(item_caption)))
     await bot.send_media_group(chat_id=chat_id, media=media)
 
 
-async def send_files(
-    bot: Bot,
-    chat_id: int,
-    files: list[Path],
-    caption: str | None,
-) -> None:
+async def send_files(bot: Bot, chat_id: int, files: list[Path], caption: str | None) -> None:
     files = sorted(files, key=lambda p: str(p))
     big = [f for f in files if f.stat().st_size > config.MAX_FILE_BYTES]
     small = [f for f in files if f.stat().st_size <= config.MAX_FILE_BYTES]
 
     if big:
-        names = ", ".join(f.name for f in big)
-        await bot.send_message(chat_id=chat_id, text=f"skipped (>50MB): {names}")
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"skipped (>50MB): {', '.join(f.name for f in big)}",
+        )
 
     if not small:
         return
@@ -236,12 +161,12 @@ async def send_files(
 
     first_caption_used = False
 
-    for chunk in _chunks(images, config.ALBUM_MAX):
+    for chunk in _chunks(images, ALBUM_MAX):
         cap = caption if not first_caption_used else None
         if len(chunk) == 1:
-            await _send_image(bot, chat_id, chunk[0], cap)
+            await _send_photo(bot, chat_id, chunk[0], cap)
         else:
-            await _send_image_album(bot, chat_id, chunk, cap)
+            await _send_album(bot, chat_id, chunk, cap)
         first_caption_used = True
 
     for f in videos:

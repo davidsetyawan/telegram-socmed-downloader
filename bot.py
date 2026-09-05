@@ -4,6 +4,7 @@ import io
 import logging
 import os
 import re
+import shutil
 import time
 from telegram import Update
 from telegram.ext import (
@@ -162,7 +163,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 )
                 return
             try:
-                files, kwdicts = await asyncio.to_thread(
+                files = await asyncio.to_thread(
                     downloader.run, url, out_dir, cookies
                 )
             except downloader.DownloadError as e:
@@ -180,7 +181,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                     hint = "no media found"
                 await update.message.reply_text(hint)
                 return
-            caption = sender.build_caption(url, kwdicts, files)
+            caption = sender.build_caption(url, files)
             await sender.send_files(context.bot, chat_id, files, caption)
 
 

@@ -22,41 +22,7 @@ _IG_PATH = ("extractor", "instagram")
 _TW_PATH = ("extractor", "twitter")
 
 
-class _KwdictCollectingJob(gd_job.DownloadJob):
-    """Subclass that captures every kwdict gallery-dl produces.
-
-    gallery-dl emits `(image_num, url, kwdict)` 3-tuples from the
-    extractor's `__iter__` and turns them into file writes. We hook by
-    overriding `handle_url` so the kwdict is appended to a shared list
-    before the file is processed. The list is then returned alongside
-    the downloaded file paths.
-    """
-
-    def __init__(self, url, kwdict_list, cfg=None):
-        super().__init__(url, cfg)
-        self._kwdict_list = kwdict_list
-
-    def handle_url(self, url, kwdict):
-        # Capture a shallow copy of the kwdict before the parent writes
-        # the file. We only keep the fields we'll need for the caption.
-        captured = {
-            k: kwdict.get(k)
-            for k in (
-                # Twitter
-                "category", "user", "content", "tweet_id", "date",
-                # Instagram (older/most fields)
-                "uploader", "uploader_id",
-                # Instagram (newer API fields)
-                "username", "fullname", "owner_id", "description",
-                # Common
-                "post_url",
-            )
-        }
-        self._kwdict_list.append(captured)
-        return super().handle_url(url, kwdict)
-
-
-def run(url: str, out_dir: Path, cookies_path: Path | None) -> tuple[list[Path], list[dict]]:
+def run(url: str, out_dir: Path, cookies_path: Path | None) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     gd_config.load(("--",))
     if cookies_path is not None:
@@ -66,9 +32,8 @@ def run(url: str, out_dir: Path, cookies_path: Path | None) -> tuple[list[Path],
     ext_path = _IG_PATH if bucket == "instagram" else _TW_PATH if bucket == "twitter" else None
     if ext_path is not None:
         gd_config.set(ext_path, "user-agent", _DEFAULT_UA)
-    kwdicts: list[dict] = []
     try:
-        j = _KwdictCollectingJob(url, kwdicts)
+        j = gd_job.DownloadJob(url)
         j.run()
     except (gdlex.AuthenticationError, gdlex.AuthorizationError) as e:
         raise DownloadError("cookies invalid / login required") from e
@@ -85,7 +50,4 @@ def run(url: str, out_dir: Path, cookies_path: Path | None) -> tuple[list[Path],
             "the cookies' account is not authorized to view this profile",
             url,
         )
-    # Trim captured kwdicts to match file count (gallery-dl can emit a
-    # kwdict for a media that fails to download).
-    kwdicts = kwdicts[: len(files)]
-    return files, kwdicts
+    return files

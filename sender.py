@@ -1,4 +1,5 @@
 import mimetypes
+import re
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -9,6 +10,7 @@ import cookies_store
 
 ALBUM_MAX = 10
 CAPTION_LIMIT = 1024
+_HANDLE_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def _category(p: Path) -> str:
@@ -41,57 +43,32 @@ def _parse_mode_for(caption: str | None) -> str | None:
     return "HTML" if caption and "<" in caption else None
 
 
-def _handle_from_kw(kw: dict) -> str | None:
-    if (u := kw.get("username")):
-        return str(u)
-    user = kw.get("user") or {}
-    if isinstance(user, dict) and (n := user.get("name")):
-        return str(n)
-    if (u := kw.get("uploader")):
-        return str(u)
-    return None
-
-
-def _display_from_kw(kw: dict) -> str | None:
-    if (f := kw.get("fullname")):
-        return str(f)
-    user = kw.get("user") or {}
-    if isinstance(user, dict) and (n := user.get("nick")):
-        return str(n)
-    return None
-
-
 def _is_post(url: str) -> bool:
     return "/p/" in url or "/reel/" in url or "/status/" in url
 
 
-def build_caption(url: str, kwdicts: list[dict], files: list[Path]) -> str | None:
-    """Build an HTML caption for the first file. See README for shape."""
+def _handle_from_url(url: str) -> str | None:
+    parts = [p for p in urlparse(url).path.strip("/").split("/") if p]
+    if not parts or parts[0] in ("p", "reel") or not _HANDLE_RE.match(parts[0]):
+        return None
+    return parts[0]
+
+
+def build_caption(url: str, files: list[Path]) -> str | None:
+    """Build an HTML caption for the first file."""
     if not files:
         return None
-    kw = kwdicts[0] if kwdicts else {}
-    handle = _handle_from_kw(kw)
-    if not handle and not _is_post(url):
-        parts = urlparse(url).path.strip("/").split("/")
-        if parts and parts[0]:
-            handle = parts[0]
-    display = _display_from_kw(kw)
+    handle = _handle_from_url(url)
     bucket = cookies_store.bucket_for_host(url) or ""
+    host = "www.instagram.com" if bucket == "instagram" else "x.com"
     if handle:
-        host = "www.instagram.com" if bucket == "instagram" else "x.com"
         profile = f"https://{host}/{handle}"
         handle_link = f'<a href="{_html(profile)}">@{_html(handle)}</a>'
     else:
         handle_link = "unknown"
     byline = f"{'By' if _is_post(url) else 'From'}: {handle_link}"
-    if display:
-        byline += f" ({_html(display)})"
-    if _is_post(url):
-        content = (kw.get("description") or kw.get("content") or "").strip()
-        post_url = str(kw.get("post_url") or url)
-        body = "\n\n".join(p for p in (_html(content), byline, _html(post_url)) if p)
-    else:
-        body = f"{byline}\n{_html(url)}"
+    sep = "\n\n" if _is_post(url) else "\n"
+    body = f"{byline}{sep}{_html(url)}"
     return _truncate(body)
 
 

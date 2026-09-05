@@ -92,12 +92,24 @@ def _kwdict_content(kw: dict) -> str | None:
 def _kwdict_post_url(kw: dict, fallback_url: str) -> str:
     return str(kw.get("post_url") or fallback_url)
 
-
 def _truncate_caption(text: str, limit: int = 1024) -> str:
     """Telegram caption limit is 1024 chars; trim and add ellipsis if needed."""
     if len(text) <= limit:
         return text
     return text[: limit - 1].rstrip() + "…"
+
+def _profile_url(handle: str, host_hint: str) -> str:
+    """Build a profile URL for a given handle, picking the right host.
+
+    `host_hint` is the original URL's host so the profile link points to
+    the same platform the user sent from.
+    """
+    if "instagram.com" in host_hint:
+        return f"https://www.instagram.com/{handle}/"
+    # twitter.com or x.com
+    if "twitter.com" in host_hint:
+        return f"https://twitter.com/{handle}"
+    return f"https://x.com/{handle}"
 
 
 def build_caption(
@@ -105,10 +117,17 @@ def build_caption(
 ) -> str | None:
     """Build a caption for the first file in the album.
 
-    Profile URL: '@<handle> (<display name>)\\n<profile url>'
-    Post URL:    '<post text>\\n\\nBy: @<handle> (<display name>)\\n<post url>'
+    Post URL:
+        <post text>
 
-    Returns None if no caption is possible (e.g. no handle found).
+        By: [@<handle>](<profile url>) (<display name>)
+        <post url>
+
+    Profile URL:
+        From: [@<handle>](<profile url>) (<display name>)
+        <profile url>
+
+    Returns None if no caption is possible (no files).
     """
     if not files:
         return None
@@ -116,16 +135,22 @@ def build_caption(
     first_kw = kwdicts[0] if kwdicts else {}
     handle = _kwdict_username(first_kw) or _username_from_url(url)
     display = _kwdict_display(first_kw)
+    host_hint = urlparse(url).hostname or ""
+    if handle:
+        profile_url = _profile_url(handle, host_hint)
+        handle_md = f"[@{handle}]({profile_url})"
+    else:
+        handle_md = "unknown"
     if kind == "post":
         content = (_kwdict_content(first_kw) or "").strip()
         post_url = _kwdict_post_url(first_kw, url)
-        byline = f"By: @{handle}" if handle else "By: unknown"
+        byline = f"By: {handle_md}"
         if display:
             byline += f" ({display})"
         body = "\n\n".join(part for part in (content, byline, post_url) if part)
     else:
-        # Profile: '@<handle> (<display name>)\\n<profile url>'
-        line1 = f"@{handle}" if handle else "@unknown"
+        # Profile: 'From: [@<handle>](<profile url>) (<display name>)\\n<profile url>'
+        line1 = f"From: {handle_md}"
         if display:
             line1 += f" ({display})"
         body = f"{line1}\n{url}"
@@ -135,21 +160,22 @@ def build_caption(
 async def _send_image(bot: Bot, chat_id: int, f: Path, caption: str | None) -> None:
     with open(f, "rb") as fh:
         data = fh.read()
-    await bot.send_photo(chat_id=chat_id, photo=data, filename=f.name, caption=caption)
+    await bot.send_photo(chat_id=chat_id, photo=data, filename=f.name, caption=caption, parse_mode="Markdown" if caption and "[" in caption else None)
 
 
 async def _send_video(bot: Bot, chat_id: int, f: Path, caption: str | None) -> None:
     with open(f, "rb") as fh:
         data = fh.read()
     await bot.send_video(
-        chat_id=chat_id, video=data, filename=f.name, caption=caption, supports_streaming=True
+        chat_id=chat_id, video=data, filename=f.name, caption=caption, supports_streaming=True,
+        parse_mode="Markdown" if caption and "[" in caption else None,
     )
 
 
 async def _send_doc(bot: Bot, chat_id: int, f: Path, caption: str | None) -> None:
     with open(f, "rb") as fh:
         data = fh.read()
-    await bot.send_document(chat_id=chat_id, document=data, filename=f.name, caption=caption)
+    await bot.send_document(chat_id=chat_id, document=data, filename=f.name, caption=caption, parse_mode="Markdown" if caption and "[" in caption else None)
 
 
 async def _send_image_album(
@@ -160,7 +186,7 @@ async def _send_image_album(
         with open(f, "rb") as fh:
             data = fh.read()
         item_caption = caption if idx == 0 else None
-        media.append(InputMediaPhoto(media=data, filename=f.name, caption=item_caption))
+        media.append(InputMediaPhoto(media=data, filename=f.name, caption=item_caption, parse_mode="Markdown" if item_caption and "[" in item_caption else None))
     await bot.send_media_group(chat_id=chat_id, media=media)
 
 

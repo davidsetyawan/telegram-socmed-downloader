@@ -3,4 +3,5 @@ __pycache__/
 *.pyc
 tmp/
 storage/cookies.txt
+storage/cookies_*.txt
 .env

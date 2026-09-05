@@ -156,28 +156,26 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     chat_id = update.effective_chat.id
 
     # Outer try: catch Telegram API errors (network blips, TimedOut).
-    # Without this, a single failed edit_text can kill the bot.
     try:
         lock = chat_locks.setdefault(chat_id, asyncio.Lock())
         async with lock:
-            status = await update.message.reply_text("starting download...")
             out_dir = paths.TMP_DIR / f"{chat_id}_{int(time.time())}"
             out_dir.mkdir(parents=True, exist_ok=True)
             try:
                 cookies = cookies_store.get_path_for_host(url)
                 if cookies is None:
                     bucket = _host_bucket(url)
-                    await status.edit_text(
+                    await update.message.reply_text(
                         f"no {bucket} cookies uploaded yet; admin must "
                         f"/uploadcookies first (filename must contain '{bucket}')"
                     )
                     return
                 try:
-                    files = await asyncio.to_thread(
+                    files, kwdicts = await asyncio.to_thread(
                         downloader.run, url, out_dir, cookies
                     )
                 except downloader.DownloadError as e:
-                    await status.edit_text(str(e))
+                    await update.message.reply_text(str(e))
                     return
                 if not files:
                     bucket = _host_bucket(url)
@@ -190,10 +188,10 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                         )
                     else:
                         hint = "no media found"
-                    await status.edit_text(hint)
+                    await update.message.reply_text(hint)
                     return
-                await sender.send_files(context.bot, chat_id, files)
-                await status.edit_text(f"done: {len(files)} file(s)")
+                caption = sender.build_caption(url, kwdicts, files)
+                await sender.send_files(context.bot, chat_id, files, caption)
             finally:
                 shutil.rmtree(out_dir, ignore_errors=True)
     except TelegramError as e:
